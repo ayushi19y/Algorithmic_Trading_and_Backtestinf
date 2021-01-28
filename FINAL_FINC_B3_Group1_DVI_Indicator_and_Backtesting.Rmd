@@ -1,0 +1,137 @@
+---
+title: "Algorithmic Trading - Backtesting and DVI Indicator Analysis"
+author: "Ayushi Yadav"
+date: "11/08/2020"
+output: html_document
+---
+
+### Introduction
+As a trader, it can be overwhelming to find the right indicator with all the options available. Trading using prices often includes a high level of subjectivity and intuition, and traders, especially those with less empirical experience could use added confirmation from technical indicators. The DVI indicator introduced in 2009, is a momentum indicator was created by David Varadi from CSS Analytics, oscillating between 0 and 1. DVI is a smooth momentum oscillator designed to take both - 1.) smoothed amount of returns over different time periods and 2.) the stretch i.e. the relative number of up versus down days over different time windows, into account. DVI can also be used as a trend indicator, making it more effective. Usually during trading with DVI, it is advised to enter short if the closing price of the stock is above 0.5, and a long position otherwise. Despite its simplicity, this strategy is quite successful. 
+
+### Scope of Analysis
+In this report, we will look at DVI as a day trading indicator, that may potentially assist investors in selecting high probability trades and managing them effectively.We will analyze the effectiveness of the indicator by backtesting this strategy in R. 
+
+### Trading and Behavioral Finance
+Behavioral finance has grown in popularity to explain investment psychology of financial actors. While many traders prefer price action as their main method of analyzing the market, there are a lot of traders who use indicators. Research has shown that a significant portion of investors are affected by behavioral bias, such as lose aversion, overconfidence and past beliefs being slow to change with new information. Technical indicators often add more filters that can allow for a lot more objectivity in trading and remove perception biases involved. This paradigm shift counters the classical assumption of completely rational agents in making financial decisions. Behavioral finance provides a working framework that can be used to detect and mitigate bias in making investments. The linkage of the field with the DVI indicator will be explored in this report.  
+
+### Analysis Methodology
+#### Initial Setup
+The first step towards the analysis requires loading of relevant packages. The quantmod package is added to extract Ticker data over a period of time. Technical Trading Rules or TTR package is used to calculate calculate the DVI of the close prices of stocks.The Performance Analytics package is used to calculate the cumulative returns. The commonly used dplyr and lubridate package are used for data manipulation and dealing with dates respectively. The ggplot package is used to develop a plots for cumulative returns and threshold values.. 
+
+```{r message=FALSE}
+library(dplyr) 
+library(lubridate)
+library(ggplot2)
+library(quantmod)
+library(PerformanceAnalytics)
+library(data.table)
+library(TTR)
+```
+
+#### Function 1 - Performing Base Level Backtest
+Backtesting is a common practice to determine the profitability of algorithmic trading strategies in a systemic manner. Function 1 performed a basic back test, where a ticker, testing period and DVI threshold were user-defined. Using the quantmod package, the getSymbols function was used to obtain daily stock price information. A simple string length check was used to accept two date formats: year-month-day and year. The ticker close price was used to calculate DVI indicator from the TTR package. The trading rule, defined in the report introduction, constructed a signal by using the ifelse function. The trading signal was lagged to incorporate yesterday's signals to today's returns and removed NA values. Long trades were labeled as 1 while short trades were labeled as -1. The number and percent of long/short trades were calculated by sum-searching 1/-1 values from the total. The cumulative returns of the trading rule was also determined by taking the product of the daily stock returns and the lagged signal. All results were merged into a single dataframe and were shown below. 
+
+```{r}
+Function1 <- function(tic, start_date, end_date, dvi_mark){
+  
+  #--------extracting daily prices ---------#
+  
+  if (nchar(start_date)>5){
+    begindate <- ymd(start_date)
+    enddate <- ymd(end_date)
+    prices <- getSymbols(tic, auto.assign = F, from = begindate,to =enddate,periodicity = "daily")}
+
+  else{
+    prices <- getSymbols(tic, auto.assign = F,from = paste0(start_date,'-01-01'), to = paste0(end_date,'-12-31'),periodicity = "daily")
+  }
+  
+  prices = prices[,4] #Extracting the close price column.
+  daily_returns <- periodReturn(prices, period = "daily", type = "arithmetic")
+    
+  #-------calculating DVI after extracting the close price column------#
+  dvi <- DVI(prices)
+  dvi <- dvi$dvi
+
+  #----------Defining trading rule----------#
+  position <- ifelse(dvi$dvi < dvi_mark, 1, -1)
+  lag_postn <- Lag(position)
+  
+  stock_return_out <- merge(prices, daily_returns, dvi, position, lag_postn)
+  colnames(stock_return_out) <- c("Price", "Daily_Returns", "DVI", "Position", "Signal")
+  stock_return_out <- na.omit(stock_return_out)
+
+  #----------Grouping the data by group counter, and calculating cumulative returns---------#
+  long_trades <- sum(stock_return_out$Position == 1)
+  short_trades <- sum(stock_return_out$Position == -1)
+  long_pos_percent <- (long_trades/length(stock_return_out$Position))*100
+  short_pos_percent <- (short_trades/length(stock_return_out$Position))*100
+  cum_return <- Return.cumulative(daily_returns*stock_return_out$Signal)
+  back_test_df <- data.frame(long_trades, short_trades, long_pos_percent, short_pos_percent, cum_return)
+  colnames(back_test_df) <- c("No.of Long Trades", "No.of Short Trades", "Time in Long Position", "Time in Short Position", "Cumulative Returns using DVI")
+  return(back_test_df)
+ }  
+```
+
+#### Function 2 - Simulating multiple Backtest periods
+As shown, Function 2 was applied for multiple backtesting simulations based on the testing period provided. The test outcome corresponds with the ones from Function 1. In other words, the generated data table provided the means over iteration for the simulations (50.58% long trade percentage and 49.42% short trade percentage). User inputs were converted to numeric data types. The mapply function was used to apply function 1 on each testing period. The cumulative return density plot visualized the cumulative return from this strategy.
+
+```{r}
+Function2 <- function(TICKER,testing,range,threshold){
+  range <- as.numeric(range)
+  begindate <- as.numeric(range[1]:(range[2]+1-testing))
+  enddate <- as.numeric((range[1]-1+testing):range[2])
+  df <- as.data.frame(matrix(as.numeric(mapply(Function1,TICKER, begindate, enddate,threshold)),5))
+  table1 <- data.frame(t(rowMeans(df)))
+  colnames(table1) <- c('long_trades','short_trades','percent_long','percent_short','cumret')
+  print(table1)
+  c <- as.data.frame(t(df[5,]))
+  colnames(c) <- 'Cumret'
+  ggplot(c,aes(x=Cumret)) + geom_density()
+}
+```
+
+#### Function 3 - Simulating DVI Thresholds
+For Function 3, it went through multiple testing for different DVI threshold values. The output table indicated the number of long trades and short trades for the threshold range (0.40 to 0.60). The threshold_cumulative plot illustrated the relationship between the cumulative return and the threshold value. Backtesting provided meaningful results if bias is avoided. One major obstacle we encountered during the process was the variations of dates and years available in the dataset. It grew to be a bit time-consuming to have a generic code without adjusting the format first to a base format. Another major goal for this project was to make our algorithm less tedious and easier to read. One thing we could not resolve in the end was that we did not manage to completely analyze the data for DVI, such that our strategy only applies for a partial period.
+
+```{r}
+Function3 <- function(TICKER,begindate,enddate,low,high,increments){
+  threshold <- seq(low,high,increments)
+  df1 <- as.data.frame(matrix(as.numeric(mapply(Function1,TICKER, begindate, enddate,threshold)),5))
+  table2 <- data.frame(t((df1[c(1,2,5),])))
+  colnames(table2) <- c('long_trades','short_trades','cumret')
+  table2 <- cbind(threshold=threshold,table2)
+  rownames(table2)<-NULL
+  print(table2)
+  ggplot(table2,aes(x=threshold,y=cumret)) + geom_line()
+}
+```
+
+### Running the functions
+The functions are run taking the parameters as inputs.
+
+```{r}
+Function1("JNJ", 20140101, 20171231, 0.5)
+```
+
+```{r}
+Function2("JNJ", 3, c("2010", "2016"),0.5)
+```
+
+```{r}
+Function3("JNJ","20140101","20171231",0.4,0.6,0.01)
+```
+
+### Results and Discussion
+As the outputs suggest, DVI performs better for short trading position for the Johnson & Johnson stock. The stock has a longer period of short trade position than long ones. The Cumulative results have shown a consistent increase for this position. This information can be used by the investors to make better decisions for their trading strategy. We feel that better results can be obtained when it is used as a complement to DVO using DVI as a filter to separate the higher alpha trades. This way, DVI increase returns by highlighting situations in which increased or reduced exposure would be desirable and by reducing draw-down periods. 
+
+### Conclusion
+Algorithmic trading was used to carryout out trades from our DVI rule-based system without any human intervention. Some advantages of the approach include the ability of backtesting, provide statistical information on historical/current performances and greater efficiency on high frequency trading. The elimination of discretionary input from human traders have significant effects. Emotions like fear and greed can be overwhelming factors when trading. As shown in [1], hedge funds have been found to have loss aversion during afternoons that were lead from mornings with losing trading positions. Another example would also include retail investors having overconfidence in the information they subscribe to (i.e. Yahoo Finance) and under- or overacting to changes in security prices[2]. Since algorithmic trades are unaffected by psychological factors, they can be useful in mitigating bias in investments, especially ones that contain long drawdown periods that may be difficult for human traders to weather. It is noted that algorithmic trading strategies have their disadvantages as well. Typically large capital requirements are needed since fewer brokers can track automated trading executions with large account minimums. That also does not account for expensive intraday financial data needed for some high frequency trading strategies. Lastly expertise in programming and mathematics are requirements to generate  quantitative models for algorithmic trading. 
+
+### References
+[1] Hong, H., J. Kubik, and J. Stein. 2005. “Thy Neighbor’s Portfolio: Word-of-Mouth Effects in the Holdings andTrades of Money Managers.” Journal of Finance, vol. 60, no. 6 (December):2801–2824.“A mutual fund manager is more likely to buy (or sell) a particular stock in any quarter if other managersin the same city are buying (or selling) that same stock. This pattern shows up even when the fundmanager and the stock in question are located far apart, so it is distinct from anything having to dowith  local  preference.  The  evidence  can  be  interpreted  in  terms  of  an  epidemic  model  in  whichinvestors spread information about stocks to one another by word of mouth.” [p. 2801]
+
+[2] Daniel, K., D. Hirshleifer, and A. Subrahmanyam. 1998. “Investor Psychology and Security Market Under- andOverreactions.” Journal of Finance, vol. 53, no. 6 (December):1839–1885.“The authors propose a theory of security market under- and overreactions based on two well-knownpsychological biases: investor overconfidence and biased self-attribution. Their theory implies thatinvestors overreact to private information signals and underreact to public information signals. Theauthors show that short-run positive return autocorrelations can be a result of continuing overreaction.These short-run effects, however, must eventually be followed by a long-run correction. Thus, short-run  positive  autocorrelations  can  be  consistent  with  long-run  negative  autocorrelations.”  [abstractwritten by Stephen E. Wilcox, CFA Digest, Spring 1999, p. 69]
+
+[3] Analyzing the DVI Indicator. (2015, May 05). Retrieved November 14, 2020, from http://www.quintuitive.com/2013/11/30/analyzing-the-dvi-indicator/
+
+
